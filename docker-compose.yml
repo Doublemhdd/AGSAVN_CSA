@@ -1,32 +1,38 @@
-version: '3'
+version: '3.8'
 
 services:
-  frontend:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    ports:
-      - "3000:3000"
-    environment:
-      - NODE_ENV=production
+  web:
+    build: .
     restart: always
-    networks:
-      - agsavn-network
+    volumes:
+      - .:/app
+      - static_volume:/app/staticfiles
+      - media_volume:/app/mediafiles
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./.env
+    depends_on:
+      - db
+    environment:
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@agsavn.org}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
 
-  # Exemple de service backend (à adapter selon les besoins)
-  # backend:
-  #   build:
-  #     context: ./backend
-  #     dockerfile: Dockerfile
-  #   ports:
-  #     - "5000:5000"
-  #   environment:
-  #     - NODE_ENV=production
-  #   restart: always
-  #   networks:
-  #     - agsavn-network
+  db:
+    image: postgres:15
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    ports:
+      - "5432:5432"
+    env_file:
+      - ./.env
+    environment:
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_DB=${DB_NAME}
 
-networks:
-  agsavn-network:
-    driver: bridge
+volumes:
+  postgres_data:
+  static_volume:
+  media_volume:
 

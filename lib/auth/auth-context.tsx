@@ -12,6 +12,10 @@ import {
   type AuthResult,
 } from "./auth-service"
 
+// Get cookie expiry from environment or set default to 7 days
+const COOKIE_EXPIRY_DAYS = Number(process.env.NEXT_PUBLIC_AUTH_COOKIE_EXPIRY_DAYS || 7);
+const COOKIE_MAX_AGE = COOKIE_EXPIRY_DAYS * 24 * 60 * 60; // Convert to seconds
+
 interface AuthContextType {
   user: Omit<User, "passwordHash"> | null
   loading: boolean
@@ -31,8 +35,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const setAuthToken = (token: string) => {
     try {
       localStorage.setItem("auth_token", token)
-      // Définir le cookie avec une expiration de 7 jours
-      document.cookie = `auth_token=${token}; path=/; max-age=${7 * 24 * 60 * 60}; SameSite=Lax`
+      // Définir le cookie avec une expiration basée sur la variable d'environnement
+      document.cookie = `auth_token=${token}; path=/; max-age=${COOKIE_MAX_AGE}; SameSite=Lax`
       console.log("Token d'authentification défini avec succès")
     } catch (error) {
       console.error("Erreur lors de la définition du token:", error)
@@ -52,34 +56,38 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     // Vérifier si l'utilisateur est déjà connecté
-    try {
-      const token = localStorage.getItem("auth_token")
-      console.log("Token trouvé dans localStorage:", !!token)
+    const checkAuth = async () => {
+      try {
+        const token = localStorage.getItem("auth_token")
+        console.log("Token trouvé dans localStorage:", !!token)
 
-      if (token) {
-        const { valid, user } = verifyToken(token)
-        console.log("Vérification du token:", valid ? "valide" : "invalide")
+        if (token) {
+          const { valid, user } = await verifyToken(token)
+          console.log("Vérification du token:", valid ? "valide" : "invalide")
 
-        if (valid && user) {
-          setUser(user)
-          // S'assurer que le cookie est également défini
-          document.cookie = `auth_token=${token}; path=/; max-age=${7 * 24 * 60 * 60}; SameSite=Lax`
-        } else {
-          console.log("Token invalide, suppression...")
-          removeAuthToken()
+          if (valid && user) {
+            setUser(user)
+            // S'assurer que le cookie est également défini
+            document.cookie = `auth_token=${token}; path=/; max-age=${COOKIE_MAX_AGE}; SameSite=Lax`
+          } else {
+            console.log("Token invalide, suppression...")
+            removeAuthToken()
+          }
         }
+      } catch (error) {
+        console.error("Erreur lors de la vérification de l'authentification:", error)
+        removeAuthToken()
+      } finally {
+        setLoading(false)
       }
-    } catch (error) {
-      console.error("Erreur lors de la vérification de l'authentification:", error)
-      removeAuthToken()
-    } finally {
-      setLoading(false)
     }
+
+    checkAuth()
   }, [])
 
   const login = async (data: LoginData): Promise<AuthResult> => {
     console.log(`Tentative de connexion pour: ${data.email}`)
-    const result = loginService(data)
+    const result = await loginService(data)
 
     if (result.success && result.token && result.user) {
       console.log("Connexion réussie, définition du token et de l'utilisateur")
@@ -94,7 +102,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const signup = async (data: SignupData): Promise<AuthResult> => {
     console.log(`Tentative d'inscription pour: ${data.email}`)
-    const result = signupService(data)
+    const result = await signupService(data)
 
     if (result.success && result.token && result.user) {
       console.log("Inscription réussie, définition du token et de l'utilisateur")

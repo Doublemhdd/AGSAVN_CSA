@@ -1,6 +1,8 @@
 import { type User, findUserByEmail, createUser, updateUser } from "../models/user"
 import { hashPassword, verifyPassword, validatePasswordStrength } from "./password"
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
+
 export interface SignupData {
   name: string
   email: string
@@ -33,40 +35,37 @@ const generateToken = (user: User): string => {
   )
 }
 
-export const signup = (data: SignupData): AuthResult => {
+export const signup = async (data: SignupData): Promise<AuthResult> => {
   try {
-    // Vérifier si l'email existe déjà
-    const existingUser = findUserByEmail(data.email)
-    if (existingUser) {
-      return { success: false, message: "Cet email est déjà utilisé" }
+    // Connect to the backend API for registration
+    const response = await fetch(`${API_URL}/auth/register/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        email: data.email,
+        password: data.password,
+        full_name: data.name,
+        role: data.role.toUpperCase()
+      }),
+    });
+
+    const responseData = await response.json();
+    
+    if (!response.ok) {
+      console.log(`Erreur d'inscription: ${JSON.stringify(responseData)}`);
+      return { 
+        success: false, 
+        message: responseData.email?.[0] || responseData.password?.[0] || responseData.detail || "L'inscription a échoué" 
+      };
     }
 
-    // Valider la force du mot de passe
-    const passwordValidation = validatePasswordStrength(data.password)
-    if (!passwordValidation.valid) {
-      return { success: false, message: passwordValidation.message }
-    }
-
-    // Créer l'utilisateur
-    const passwordHash = hashPassword(data.password)
-    const user = createUser({
-      name: data.name,
+    // If registration is successful, login the user
+    return await login({
       email: data.email,
-      passwordHash,
-      role: data.role,
-      status: "active",
-    })
-
-    // Générer un token
-    const token = generateToken(user)
-
-    // Retourner le résultat sans le hash du mot de passe
-    const { passwordHash: _, ...userWithoutPassword } = user
-    return {
-      success: true,
-      user: userWithoutPassword,
-      token,
-    }
+      password: data.password
+    });
   } catch (error) {
     console.error("Erreur lors de l'inscription:", error)
     return {
@@ -76,48 +75,46 @@ export const signup = (data: SignupData): AuthResult => {
   }
 }
 
-export const login = (data: LoginData): AuthResult => {
+export const login = async (data: LoginData): Promise<AuthResult> => {
   try {
     console.log(`Tentative de connexion pour l'email: ${data.email}`)
 
-    // Trouver l'utilisateur par email
-    const user = findUserByEmail(data.email)
-    if (!user) {
-      console.log(`Utilisateur non trouvé pour l'email: ${data.email}`)
-      return { success: false, message: "Email ou mot de passe incorrect" }
+    // Connect to the backend API instead of using localStorage
+    const response = await fetch(`${API_URL}/auth/login/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(data),
+    });
+
+    const responseData = await response.json();
+    
+    if (!response.ok) {
+      console.log(`Erreur de connexion: ${JSON.stringify(responseData)}`);
+      return { 
+        success: false, 
+        message: responseData.detail || responseData.non_field_errors?.[0] || "Email ou mot de passe incorrect" 
+      };
     }
 
-    console.log(`Utilisateur trouvé: ${user.name}, rôle: ${user.role}, statut: ${user.status}`)
+    // Extract user data and token from API response
+    const user = responseData.user;
+    const token = responseData.token.access;
 
-    // Vérifier si l'utilisateur est actif
-    if (user.status !== "active") {
-      console.log(`Utilisateur inactif: ${user.email}`)
-      return { success: false, message: "Ce compte est inactif" }
-    }
-
-    // Vérifier le mot de passe
-    const passwordValid = verifyPassword(data.password, user.passwordHash)
-    console.log(`Vérification du mot de passe: ${passwordValid ? "réussie" : "échouée"}`)
-
-    if (!passwordValid) {
-      return { success: false, message: "Email ou mot de passe incorrect" }
-    }
-
-    // Mettre à jour la date de dernière connexion
-    const updatedUser = updateUser(user.id, {
-      lastLogin: new Date().toISOString(),
-    })
-
-    // Générer un token
-    const token = generateToken(updatedUser)
-
-    // Retourner le résultat sans le hash du mot de passe
-    const { passwordHash: _, ...userWithoutPassword } = updatedUser
     return {
       success: true,
-      user: userWithoutPassword,
+      user: {
+        id: user.id,
+        name: user.full_name || user.email,
+        email: user.email,
+        role: user.role.toLowerCase() === "admin" ? "admin" : "user",
+        createdAt: user.date_joined || new Date().toISOString(),
+        lastLogin: user.last_login || new Date().toISOString(),
+        status: user.is_active ? "active" : "inactive",
+      },
       token,
-    }
+    };
   } catch (error) {
     console.error("Erreur lors de la connexion:", error)
     return {
@@ -128,27 +125,47 @@ export const login = (data: LoginData): AuthResult => {
 }
 
 // Vérifier si un token est valide
-export const verifyToken = (token: string): { valid: boolean; user?: Omit<User, "passwordHash"> } => {
+export const verifyToken = async (token: string): Promise<{ valid: boolean; user?: Omit<User, "passwordHash"> }> => {
   try {
-    const decoded = JSON.parse(atob(token))
+    // Connect to the backend API to verify the token
+    const response = await fetch(`${API_URL}/auth/verify/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      }
+    });
 
-    // Vérifier si le token a expiré
-    if (decoded.exp < Date.now()) {
-      return { valid: false }
+    if (!response.ok) {
+      return { valid: false };
     }
 
-    // Trouver l'utilisateur
-    const user = findUserByEmail(decoded.email)
-    if (!user) {
-      return { valid: false }
+    // If we get here, the token is valid. Now get the user data
+    const userResponse = await fetch(`${API_URL}/auth/me/`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+
+    if (!userResponse.ok) {
+      return { valid: false };
     }
 
-    // Retourner l'utilisateur sans le hash du mot de passe
-    const { passwordHash: _, ...userWithoutPassword } = user
+    const userData = await userResponse.json();
+    
     return {
       valid: true,
-      user: userWithoutPassword,
-    }
+      user: {
+        id: userData.id,
+        name: userData.full_name || userData.email,
+        email: userData.email,
+        role: userData.role.toLowerCase() === "admin" ? "admin" : "user",
+        createdAt: userData.date_joined || new Date().toISOString(),
+        lastLogin: userData.last_login || new Date().toISOString(),
+        status: userData.is_active ? "active" : "inactive",
+      }
+    };
   } catch (error) {
     console.error("Erreur lors de la vérification du token:", error)
     return { valid: false }

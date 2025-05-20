@@ -1,46 +1,29 @@
-# Étape de construction
-FROM node:18-alpine AS builder
+FROM python:3.12-slim
 
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV DJANGO_SETTINGS_MODULE=agsavn_backend.settings
+
+# Set work directory
 WORKDIR /app
 
-# Copier les fichiers de dépendances
-COPY package.json package-lock.json ./
+# Install dependencies
+COPY requirements.txt /app/
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Installer les dépendances
-RUN npm ci
+# Copy project
+COPY . /app/
 
-# Copier le reste des fichiers
-COPY . .
+# Make the entrypoint script executable
+RUN chmod +x /app/entrypoint.sh
 
-# Construire l'application
-RUN npm run build
+# Expose port
+EXPOSE 8000
 
-# Étape de production
-FROM node:18-alpine AS runner
+# Set the entrypoint
+ENTRYPOINT ["/app/entrypoint.sh"]
 
-WORKDIR /app
-
-# Définir les variables d'environnement
-ENV NODE_ENV production
-
-# Créer un utilisateur non-root
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
-
-# Copier les fichiers nécessaires
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/.next/standalone ./
-COPY --from=builder /app/.next/static ./.next/static
-
-# Changer la propriété des fichiers
-RUN chown -R nextjs:nodejs /app
-
-# Utiliser l'utilisateur non-root
-USER nextjs
-
-# Exposer le port
-EXPOSE 3000
-
-# Définir la commande de démarrage
-CMD ["node", "server.js"]
+# Run the application
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "agsavn_backend.wsgi:application", "--workers", "4"]
 
